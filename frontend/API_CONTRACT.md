@@ -1,9 +1,10 @@
 # ShopSphere API contract
 
-The frontend is built against this REST contract. The Django backend does not implement any of
-these endpoints yet (only the `Category`, `Product`, `ProductImage`, `Review`, `User` and
-`Address` models exist, plus an empty `orders` / `payments` app) — this document is the spec for
-building the matching serializers/views/urls with DRF + SimpleJWT.
+The frontend is built against this REST contract, and **the Django backend now implements it in
+full** (`backend/apps/{users,products,orders}`) — this document doubles as the spec it was built
+from and the reference for what's actually live. The one exception is the `payments` app, which is
+still an unused stub: `payment_method` is stored on the order, but nothing charges a card or
+triggers an M-Pesa STK push yet.
 
 Base URL: `VITE_API_BASE_URL` (defaults to `http://localhost:8000/api`).
 
@@ -54,9 +55,9 @@ the custom user model), so no further backend changes are needed there beyond wi
 
 `ProductImage`: `{ id, image, alt_text, is_primary }`
 
-Both `average_rating` and `review_count` should be annotated on the queryset (e.g. via
-`Avg("reviews__rating")` / `Count("reviews")`), matching the `average_rating` property already on
-the `Product` model.
+Both `average_rating` and `review_count` are annotated on the queryset (`Avg("reviews__rating")` /
+`Count("reviews", distinct=True)` in `ProductViewSet.get_queryset`), rather than using the
+`average_rating` model property directly, to avoid an N+1 query per product in list views.
 
 ## Reviews
 
@@ -69,8 +70,9 @@ the `Product` model.
 
 `Review`: `{ id, product, user: { id, first_name, last_name, email }, rating, comment, created_at }`
 
-The `Review` model already enforces one review per user per product via `unique_together`; a
-duplicate `POST` should return `400`.
+The `Review` model enforces one review per user per product via `unique_together`; the serializer
+also checks this explicitly before save so a duplicate `POST` returns a friendly `400` with
+`{ "detail": [...] }` rather than an IntegrityError.
 
 ## Addresses
 
@@ -81,13 +83,14 @@ duplicate `POST` should return `400`.
 | PATCH  | `/addresses/:id/`   | JWT (owner) | Partial of the above                                                                | `Address`     |
 | DELETE | `/addresses/:id/`   | JWT (owner) | –                                                                                    | `204`         |
 
-Setting `is_default: true` on one address should unset it on the user's other addresses.
+Setting `is_default: true` on one address unsets it on the user's other addresses
+(`AddressViewSet._enforce_single_default`).
 
-## Orders (new `orders` app — models still need to be written)
+## Orders
 
-Suggested models: `Order` (user, order_number, status, payment_method, is_paid, subtotal,
-shipping_fee, total, shipping_address FK, created_at) and `OrderItem` (order, product, quantity,
-unit_price).
+`Order` (user, order_number, status, payment_method, is_paid, subtotal, shipping_fee, total,
+shipping_address FK, created_at) and `OrderItem` (order, product, quantity, unit_price) —
+`backend/apps/orders/models.py`.
 
 | Method | Path                   | Auth | Body                                                                                   | Response            |
 | ------ | ---------------------- | ---- | ----------------------------------------------------------------------------------------- | --------------------- |
@@ -99,15 +102,17 @@ unit_price).
 `payment_method` is one of `card`, `mpesa`, `cash_on_delivery`. `status` is one of `pending`,
 `processing`, `shipped`, `delivered`, `cancelled`.
 
-Order creation should be transactional: validate stock, decrement it, snapshot `unit_price` from
-the product's `current_price` at the time of purchase, and compute `subtotal`/`shipping_fee`/`total`
-server-side (don't trust client-submitted prices).
+Order creation is transactional (`CreateOrderSerializer.create`): each product row is locked with
+`select_for_update()`, stock is validated and decremented, `unit_price` is snapshotted from the
+product's `current_price` at purchase time, and `subtotal`/`shipping_fee`/`total` are computed
+server-side — client-submitted prices are never trusted (the request only sends `product` +
+`quantity` per line item). Cancelling restores the stock it decremented.
 
 `Order`: `{ id, order_number, status, payment_method, is_paid, items: OrderItem[], shipping_address: Address, subtotal, shipping_fee, total, created_at }`
 
 `OrderItem`: `{ id, product: { id, name, slug, primary_image }, quantity, unit_price, subtotal }`
 
-## Auth error shape
+## Error shape
 
 All errors are expected as DRF's default: `{ "detail": "..." }` for generic errors, or
 `{ "field_name": ["message"] }` for validation errors. The frontend reads `error.data.detail`

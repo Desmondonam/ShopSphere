@@ -5,8 +5,9 @@ management. This document covers how the app is put together, why it's structure
 how it talks to the Django backend.
 
 > Backend contract: see [`API_CONTRACT.md`](./API_CONTRACT.md) for the exact endpoints this app
-> expects. As of this writing the backend only has models — no serializers/views/urls — so treat
-> that file as the spec to build against.
+> talks to. The Django backend now implements the full contract (see the root
+> [`README.md`](../README.md) for backend setup) — the one gap is a real payment gateway; the
+> `payment_method` chosen at checkout is stored on the order but nothing actually charges it yet.
 
 ---
 
@@ -337,9 +338,10 @@ npm run dev                # http://localhost:5173
 ```
 
 The backend must be running at `VITE_API_BASE_URL` with `CORS_ALLOWED_ORIGINS` including
-`http://localhost:5173` (already the default in `backend/config/settings.py`). Until the endpoints
-in `API_CONTRACT.md` are implemented, data-fetching screens will show their empty/error states
-rather than crash — the app itself runs fine standalone.
+`http://localhost:5173` (already the default in `backend/config/settings.py`) — see the root
+[`README.md`](../README.md) for backend setup, including `python manage.py seed_demo_data` for a
+non-empty catalog. If the backend isn't running, data-fetching screens fall back to their
+empty/error states rather than crashing — the app itself still runs standalone.
 
 ## Environment variables
 
@@ -374,10 +376,13 @@ rather than crash — the app itself runs fine standalone.
 
 ## Known follow-ups
 
-- The backend needs every endpoint in `API_CONTRACT.md` implemented before this app is functional
-  end-to-end — right now it's a complete frontend against an unbuilt API.
+- No real payment gateway on the backend yet — `payment_method` is stored on the order but nothing
+  actually charges a card or triggers an M-Pesa STK push. Checkout completes as an unpaid order
+  (`is_paid: false`), which is fine for card / cash-on-delivery demo flows.
 - The production bundle is a single ~530 KB JS chunk (see the build output). Worth splitting by
   route with `React.lazy` once the app grows further; not done yet to keep the initial pass simple.
 - `WishlistItem` doesn't carry `stock`, so "add to cart" from the wishlist page assumes
   availability (defaults to a stock of 99). Fine for now; revisit if the wishlist starts reading
   live product data instead of a snapshot taken at add-time.
+- No automated tests on either side yet — the API was verified with manual end-to-end smoke tests
+  (see the root README's status section).
